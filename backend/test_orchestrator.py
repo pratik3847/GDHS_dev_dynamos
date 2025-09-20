@@ -34,8 +34,8 @@ if __name__ == "__main__":
     print("\n>>> Literature Agent Results:")
     literature = final_state.get("literature", {})
     parsed = literature.get("articles", {})
-
     articles = parsed.get("summaries", []) if isinstance(parsed, dict) else []
+
     if not articles:
         print("No literature found for query:", literature.get("query", ""))
     else:
@@ -83,3 +83,15 @@ if __name__ == "__main__":
             print(f"  Source: {treatment.get('source', 'N/A')}")
             print("-" * 80)
     print("\nDisclaimer:", treatment_results.get("disclaimer", ""))
+
+    # -------------------------------
+    # Summarizer Agent results
+    # -------------------------------
+    print("\n>>> Final Summarized Report (Summarizer Agent):")
+    summary = final_state.get("summary", "")
+    if not summary:
+        print("No summary generated.")
+    else:
+        print("\n===== Patient Summary =====")
+        print(summary)
+        print("===========================")
