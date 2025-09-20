@@ -1,9 +1,11 @@
 import json
 from langgraph.graph import StateGraph, END
 
-# Import both agents
+# Import agents
 from agents.symptom_analyzer import symptom_analyzer_agent
 from agents.literature_agent import literature_agent
+from agents.case_matcher import case_matcher_agent
+from agents.treatment_agent import treatment_agent   # ✅ new import
 
 # -------------------------------
 # Orchestrator Graph
@@ -11,13 +13,17 @@ from agents.literature_agent import literature_agent
 def build_orchestrator_graph():
     graph = StateGraph(dict)
 
-    # Add both agents as nodes
+    # Add agents as nodes
     graph.add_node("symptom_analyzer", symptom_analyzer_agent)
     graph.add_node("literature_agent", literature_agent)
+    graph.add_node("case_matcher", case_matcher_agent)
+    graph.add_node("treatment_agent", treatment_agent)   # ✅ new
 
-    # Flow: Entry → Symptom Analyzer → Literature Agent → End
+    # Flow: Entry → Symptom Analyzer → Literature Agent → Case Matcher → Treatment Agent → End
     graph.set_entry_point("symptom_analyzer")
     graph.add_edge("symptom_analyzer", "literature_agent")
-    graph.add_edge("literature_agent", END)
+    graph.add_edge("literature_agent", "case_matcher")
+    graph.add_edge("case_matcher", "treatment_agent")   # ✅ ensure diagnosis flows
+    graph.add_edge("treatment_agent", END)
 
     return graph.compile()

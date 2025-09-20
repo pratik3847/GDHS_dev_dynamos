@@ -3,3 +3,22 @@ uvicorn[standard]==0.32.0
 pydantic==2.9.2
 python-dotenv==1.0.1
 openai==1.45.0
+
+
+
+---
+
+## ⚙️ Installation & Setup
+
+```bash
+# Clone the repo
+git clone https://github.com/pratik3847/GDHS_dev_dynamos.git
+cd GDHS_dev_dynamos
+
+# Create virtual environment
+python -m venv venv
+.\venv\Scripts\activate   # On Windows
+source venv/bin/activate  # On Mac/Linux
+
+# Install dependencies
+pip install -r requirements.txt
