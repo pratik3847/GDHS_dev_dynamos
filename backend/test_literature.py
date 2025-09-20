@@ -10,10 +10,13 @@ if __name__ == "__main__":
 
     final_state = graph.invoke(input_state)
 
-    print("\n=== Literature Agent Output (PubMed) ===\n")
+    print("\n=== Literature Agent Output (PubMed + LLM Summarizer) ===\n")
 
     literature = final_state.get("literature", {})
-    articles = literature.get("articles", [])
+    parsed = literature.get("articles", {})
+
+    # LLM returns JSON with "summaries"
+    articles = parsed.get("summaries", []) if isinstance(parsed, dict) else []
 
     if not articles:
         print("No articles found for query:", literature.get("query", ""))
@@ -22,7 +25,7 @@ if __name__ == "__main__":
             print(f"Article {idx}:")
             print(f"  PMID: {article.get('pmid', 'N/A')}")
             print(f"  Title: {article.get('title', 'No title')}")
-            print(f"  Abstract Snippet: {article.get('abstract_snippet', 'No abstract available')}")
+            print(f"  Summary: {article.get('summary', 'No summary available')}")
             print("-" * 80)
 
     # Print disclaimer at the end
