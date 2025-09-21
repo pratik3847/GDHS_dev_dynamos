@@ -39,7 +39,11 @@ def _extract_inputs(state: Dict[str, Any]) -> Dict[str, Any]:
     # Raw patient context
     symptoms = state.get("symptoms", "")
     age = state.get("age", "")
-    history = state.get("history", "")
+    # Prefer medicalHistory, fall back to history (back-compat)
+    medical_history = state.get("medicalHistory", state.get("history", ""))
+    gender = state.get("gender", "")
+    current_meds = state.get("currentMedications", "")
+    urgency = state.get("urgency", "")
     diagnosis = state.get("diagnosis", "")
 
     # Symptom Analyzer (top 3)
@@ -75,7 +79,10 @@ def _extract_inputs(state: Dict[str, Any]) -> Dict[str, Any]:
         "patient_context": {
             "symptoms": symptoms,
             "age": age,
-            "history": history,
+            "gender": gender,
+            "medical_history": medical_history,
+            "current_medications": current_meds,
+            "urgency": urgency,
             "working_diagnosis": diagnosis,
         },
         "top_differentials": top_diffs,
@@ -140,25 +147,32 @@ def summarizer_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         ], 5)
     }
 
-    chain = summary_prompt | llm
-    result = chain.invoke({
-        "payload_json": json.dumps(payload, indent=2, ensure_ascii=False)
-    })
-
-    raw = (result.content or "").strip()
+    parsed = None
     try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        # Fallback structure, but keep raw for debugging
+        if os.getenv("OPENROUTER_API_KEY"):
+            chain = summary_prompt | llm
+            result = chain.invoke({
+                "payload_json": json.dumps(payload, indent=2, ensure_ascii=False)
+            })
+            raw = (result.content or "").strip()
+            parsed = json.loads(raw)
+    except Exception as e:
+        print(f"❌ Summarizer LLM error: {e}")
+        parsed = None
+
+    if parsed is None:
+        # Simple deterministic summary for dev mode
+        pc = payload.get("patient_context", {})
         parsed = {
             "summary": {
-                "patient_summary": "Unable to parse JSON output.",
-                "clinical_summary": "",
-                "recommendations": [],
-                "citations": {"pmids": [], "sources": []}
+                "patient_summary": f"Patient with symptoms: {pc.get('symptoms', '')}. Age: {pc.get('age', '')}, Gender: {pc.get('gender', '')}.",
+                "clinical_summary": "Preliminary outputs provided from placeholder pipelines.",
+                "recommendations": [
+                    {"type": "next_steps", "content": "Confirm history, perform physical exam, and order basic labs."}
+                ],
+                "citations": {"pmids": payload.get("_hints", {}).get("pmids", []), "sources": payload.get("_hints", {}).get("sources", [])}
             },
-            "disclaimer": "This is AI-generated and not medical advice.",
-            "raw_output": raw
+            "disclaimer": "This is AI-generated and not medical advice. In development, LLM outputs may be simplified."
         }
 
     state["summary"] = parsed.get("summary", {})

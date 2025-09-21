@@ -27,8 +27,13 @@ def fetch_pubmed_articles(query: str, max_results: int = 3):
         "retmode": "json",
         "retmax": max_results
     }
-    search_resp = requests.get(PUBMED_SEARCH_URL, params=params)
-    search_data = search_resp.json()
+    try:
+        search_resp = requests.get(PUBMED_SEARCH_URL, params=params, timeout=10)
+        search_resp.raise_for_status()
+        search_data = search_resp.json()
+    except Exception as e:
+        print(f"❌ PubMed search error: {e}")
+        return []
     id_list = search_data.get("esearchresult", {}).get("idlist", [])
 
     if not id_list:
@@ -39,8 +44,13 @@ def fetch_pubmed_articles(query: str, max_results: int = 3):
         "id": ",".join(id_list),
         "retmode": "xml"
     }
-    fetch_resp = requests.get(PUBMED_FETCH_URL, params=fetch_params)
-    root = ET.fromstring(fetch_resp.text)
+    try:
+        fetch_resp = requests.get(PUBMED_FETCH_URL, params=fetch_params, timeout=10)
+        fetch_resp.raise_for_status()
+        root = ET.fromstring(fetch_resp.text)
+    except Exception as e:
+        print(f"❌ PubMed fetch error: {e}")
+        return []
 
     results = []
     for article in root.findall(".//PubmedArticle"):
@@ -84,8 +94,34 @@ Return STRICT JSON as:
 # Agent Function
 # -------------------------------
 def literature_agent(state: Dict[str, Any]) -> Dict[str, Any]:
-    """LangGraph node for Literature Agent (PubMed + LLM summarizer)."""
-    query = state.get("symptoms", "") or state.get("diagnosis", "")
+    """LangGraph node for Literature Agent (PubMed + LLM summarizer).
+
+    Builds a more specific PubMed query using patient context to improve personalization.
+    """
+    symptoms = (state.get("symptoms") or "").strip()
+    diagnosis = (state.get("diagnosis") or "").strip()
+    age = (state.get("age") or "").__str__().strip()
+    gender = (state.get("gender") or "").strip()
+    medical_history = (state.get("medicalHistory") or state.get("history") or "").strip()
+    current_meds = (state.get("currentMedications") or "").strip()
+
+    # Construct targeted PubMed query
+    query_terms = []
+    if diagnosis:
+        query_terms.append(diagnosis)
+    if symptoms:
+        query_terms.append(symptoms)
+    if gender:
+        query_terms.append(gender)
+    if age:
+        query_terms.append(f"age {age}")
+    if medical_history:
+        query_terms.append(medical_history)
+    if current_meds:
+        query_terms.append(current_meds)
+
+    query = " AND ".join([t for t in query_terms if t]) or symptoms or diagnosis
+
     articles = fetch_pubmed_articles(query)
 
     if not articles:
@@ -101,17 +137,37 @@ def literature_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         [f"PMID: {a['pmid']}\nTitle: {a['title']}\nAbstract: {a['abstract']}" for a in articles]
     )
 
-    chain = summary_prompt | llm
-    result = chain.invoke({"abstracts": abstracts_text})
-
+    # If LLM unavailable or fails, provide minimal summaries from abstracts
+    parsed = None
     try:
-        parsed = json.loads(result.content.strip())
-    except json.JSONDecodeError:
-        parsed = {"raw_output": result.content.strip()}
+        if os.getenv("OPENROUTER_API_KEY"):
+            chain = summary_prompt | llm
+            result = chain.invoke({"abstracts": abstracts_text})
+            parsed = json.loads((result.content or "").strip())
+    except Exception as e:
+        print(f"❌ Literature summarizer error: {e}")
+        parsed = None
+    if parsed is None:
+        parsed = {
+            "summaries": [
+                {
+                    "pmid": a.get("pmid", ""),
+                    "title": a.get("title", ""),
+                    "summary": (a.get("abstract", "")[:500] or "No abstract available.")
+                }
+                for a in articles
+            ]
+        }
 
     state["literature"] = {
         "query": query,
         "articles": parsed,
+        "patient_context": {
+            "age": age,
+            "gender": gender,
+            "medical_history": medical_history,
+            "current_medications": current_meds,
+        },
         "disclaimer": "These references are from PubMed and AI-summarized; verify with a professional."
     }
     return state

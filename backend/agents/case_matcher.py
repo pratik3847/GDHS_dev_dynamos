@@ -21,6 +21,9 @@ BIOPORTAL_API_URL = "https://data.bioontology.org/search"
 # -------------------------------
 def fetch_case_matches(query: str, max_results: int = 5):
     """Search BioPortal API for ICD/SNOMED/MeSH terms related to query."""
+    if not BIOPORTAL_API_KEY:
+        # Dev fallback without external call
+        return []
     params = {
         "q": query,
         "ontologies": "ICD10CM,SNOMEDCT,MSH",
@@ -74,7 +77,15 @@ Return STRICT JSON in this schema:
 # -------------------------------
 def case_matcher_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     """LangGraph node for Case Matcher Agent (BioPortal + LLM refinement)."""
-    query = state.get("symptoms", "") or state.get("diagnosis", "")
+    symptoms = (state.get("symptoms") or "").strip()
+    diagnosis = (state.get("diagnosis") or "").strip()
+    age = (state.get("age") or "").__str__().strip()
+    gender = (state.get("gender") or "").strip()
+    medical_history = (state.get("medicalHistory") or state.get("history") or "").strip()
+
+    # Build a richer query string for ontology search
+    parts = [p for p in [diagnosis, symptoms, gender, f"age {age}" if age else "", medical_history] if p]
+    query = " ".join(parts) or symptoms or diagnosis
     if not query:
         state["case_matcher"] = {
             "matched_cases": [],
@@ -92,17 +103,37 @@ def case_matcher_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         return state
 
     # Send ontology results to LLM for ranking & selection
-    chain = matcher_prompt | llm
-    result = chain.invoke({"results": json.dumps(raw_results, indent=2)})
-
+    parsed = None
     try:
-        parsed = json.loads(result.content.strip())
-    except json.JSONDecodeError:
-        parsed = {"matched_cases": [], "raw_output": result.content.strip()}
+        if os.getenv("OPENROUTER_API_KEY"):
+            chain = matcher_prompt | llm
+            result = chain.invoke({"results": json.dumps(raw_results, indent=2)})
+            parsed = json.loads((result.content or "").strip())
+    except Exception as e:
+        print(f"❌ Case matcher LLM error: {e}")
+        parsed = None
+    if parsed is None:
+        # Simple passthrough of top 3 with basic mapping
+        parsed = {
+            "matched_cases": [
+                {
+                    "icd_code": r.get("icd_code", "N/A"),
+                    "name": r.get("name", "Unknown"),
+                    "description": r.get("description", ""),
+                    "match_score": r.get("score", 0)
+                }
+                for r in raw_results[:3]
+            ]
+        }
 
     state["case_matcher"] = {
         "query": query,
         "matched_cases": parsed.get("matched_cases", []),
+        "patient_context": {
+            "age": age,
+            "gender": gender,
+            "medical_history": medical_history,
+        },
         "disclaimer": "Ontology matches are retrieved via BioPortal (ICD/SNOMED/MeSH) and AI-refined. Verify clinically."
     }
     return state

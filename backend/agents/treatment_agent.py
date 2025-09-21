@@ -51,15 +51,16 @@ llm = ChatOpenAI(
 
 # ✅ Escaped JSON braces inside the system prompt
 treatment_prompt = ChatPromptTemplate.from_messages([
-    ("system", """You are a medical treatment recommender.
+        ("system", """You are a medical treatment recommender.
 Given drug results + condition, suggest BOTH drug and non-drug interventions.
+Incorporate patient context (age, gender, medical history, current medications) to note contraindications, interactions, and tailoring.
 Output STRICT JSON:
 {{
-  "treatments": [
-    {{"name": "string", "class": "string", "type": "drug/non-drug", "rationale": "string", "source": "string"}}
-  ]
+    "treatments": [
+        {{"name": "string", "class": "string", "type": "drug/non-drug", "rationale": "string", "source": "string"}}
+    ]
 }}"""),
-    ("user", "Condition: {condition}\nDrug Results:\n{results}")
+        ("user", "Condition: {condition}\nAge: {age}\nGender: {gender}\nMedical History: {medical_history}\nCurrent Medications: {current_meds}\nDrug Results:\n{results}")
 ])
 
 # -------------------------------
@@ -74,21 +75,48 @@ def treatment_agent(state: Dict[str, Any]) -> Dict[str, Any]:
 
     drug_results = fetch_drug_treatments(query)
 
-    chain = treatment_prompt | llm
-    result = chain.invoke({
-        "condition": query,
-        "results": json.dumps(drug_results, indent=2)
-    })
-
+    parsed = None
     try:
-        parsed = json.loads(result.content.strip())
-    except json.JSONDecodeError:
-        parsed = {"treatments": [], "raw_output": result.content.strip()}
+        if os.getenv("OPENROUTER_API_KEY"):
+            chain = treatment_prompt | llm
+            result = chain.invoke({
+                "condition": query,
+                "age": (state.get("age") or ""),
+                "gender": (state.get("gender") or ""),
+                "medical_history": (state.get("medicalHistory") or state.get("history") or ""),
+                "current_meds": (state.get("currentMedications") or ""),
+                "results": json.dumps(drug_results, indent=2)
+            })
+            parsed = json.loads((result.content or "").strip())
+    except Exception as e:
+        print(f"❌ Treatment LLM error: {e}")
+        parsed = None
+
+    if parsed is None:
+        # Minimal passthrough list from RxNorm
+        parsed = {
+            "treatments": [
+                {
+                    "name": r.get("name", "Unknown"),
+                    "class": r.get("class", "Unknown"),
+                    "type": "drug",
+                    "rationale": "Listed based on RxNorm lookup; details unavailable in dev mode.",
+                    "source": "RxNorm"
+                }
+                for r in drug_results
+            ]
+        }
 
     state["treatment"] = {
         "query": query,
         "treatments": parsed.get("treatments", []),
-        "disclaimer": "AI + RxNorm suggestions. Verify with clinical guidelines."
+        "patient_context": {
+            "age": state.get("age"),
+            "gender": state.get("gender"),
+            "medical_history": state.get("medicalHistory", state.get("history")),
+            "current_medications": state.get("currentMedications"),
+        },
+        "disclaimer": "AI + RxNorm suggestions personalized by patient context. In development, outputs may be simplified if API keys are missing. Verify with clinical guidelines."
     }
     return state
 
